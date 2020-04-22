@@ -74,7 +74,7 @@ public class ChooseModel extends AppCompatActivity {
             @Override
             public void onClick(View view) {
                 // filename in assets
-                chosen = "inception_float.tflite";
+                chosen = "cctv_model.pt";
                 // model in not quantized
                 quant = false;
                 // open camera
@@ -88,7 +88,7 @@ public class ChooseModel extends AppCompatActivity {
             @Override
             public void onClick(View view) {
                 // filename in assets
-                chosen = "inception_quant.tflite";
+                chosen = "cctv_model.pt";
                 // model in not quantized
                 quant = true;
                 // open camera

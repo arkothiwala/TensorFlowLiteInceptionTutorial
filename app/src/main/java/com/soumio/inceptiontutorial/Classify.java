@@ -1,5 +1,6 @@
 package com.soumio.inceptiontutorial;
 
+import android.content.Context;
 import android.content.Intent;
 import android.content.res.AssetFileDescriptor;
 import android.graphics.Bitmap;
@@ -15,12 +16,20 @@ import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.TextView;
 
-import org.tensorflow.lite.Interpreter;
+
+import org.pytorch.IValue;
+import org.pytorch.Module;
+import org.pytorch.Tensor;
+import org.pytorch.torchvision.TensorImageUtils;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.MappedByteBuffer;
@@ -35,14 +44,12 @@ import java.util.PriorityQueue;
 public class Classify extends AppCompatActivity {
 
     // presets for rgb conversion
-    private static final int RESULTS_TO_SHOW = 3;
+    private static final int RESULTS_TO_SHOW = 2;
     private static final int IMAGE_MEAN = 128;
     private static final float IMAGE_STD = 128.0f;
 
-    // options for model interpreter
-    private final Interpreter.Options tfliteOptions = new Interpreter.Options();
-    // tflite graph
-    private Interpreter tflite;
+
+    Module module = null;
     // holds all the possible labels for model
     private List<String> labelList;
     // holds the selected image data as bytes
@@ -79,6 +86,7 @@ public class Classify extends AppCompatActivity {
     private TextView Confidence1;
     private TextView Confidence2;
     private TextView Confidence3;
+    private Tensor outputTensor;
 
     // priority queue that will hold the top results from the CNN
     private PriorityQueue<Map.Entry<String, Float>> sortedLabels =
@@ -104,7 +112,7 @@ public class Classify extends AppCompatActivity {
 
         //initilize graph and labels
         try{
-            tflite = new Interpreter(loadModelFile(), tfliteOptions);
+            module = Module.load(assetFilePath(this, "cctv_model.pt"));
             labelList = loadLabelList();
         } catch (Exception ex){
             ex.printStackTrace();
@@ -165,15 +173,27 @@ public class Classify extends AppCompatActivity {
                 // get current bitmap from imageView
                 Bitmap bitmap_orig = ((BitmapDrawable)selected_image.getDrawable()).getBitmap();
                 // resize the bitmap to the required input size to the CNN
-                Bitmap bitmap = getResizedBitmap(bitmap_orig, DIM_IMG_SIZE_X, DIM_IMG_SIZE_Y);
-                // convert bitmap to byte array
-                convertBitmapToByteBuffer(bitmap);
+                // Bitmap bitmap = getResizedBitmap(bitmap_orig, DIM_IMG_SIZE_X, DIM_IMG_SIZE_Y);
+                int[] target_shape = getResizeTarget(bitmap_orig, 224, 224);
+                int target_height = target_shape[0];
+                int target_width = target_shape[1];
+                // bitmap = getResizedBitmap(bitmap_orig,  target_width, target_height);
+                Bitmap bitmap = Bitmap.createScaledBitmap(bitmap_orig,  target_width, target_height, true);
+                // bitmap = cropBitMap(bitmap, 224, 224);
+
+                // preparing input tensor
+                final Tensor inputTensor = TensorImageUtils.bitmapToFloat32Tensor(bitmap,
+                        TensorImageUtils.TORCHVISION_NORM_MEAN_RGB, TensorImageUtils.TORCHVISION_NORM_STD_RGB);
                 // pass byte data to the graph
                 if(quant){
-                    tflite.run(imgData, labelProbArrayB);
+                    outputTensor = module.forward(IValue.from(inputTensor)).toTensor();
                 } else {
-                    tflite.run(imgData, labelProbArray);
+                    outputTensor = module.forward(IValue.from(inputTensor)).toTensor();
                 }
+                // getting tensor content as java array of floats
+                //final float[] scores
+                labelProbArray[0] = softmax(outputTensor.getDataAsFloatArray());
+
                 // display the results
                 printTopKLabels();
             }
@@ -248,7 +268,7 @@ public class Classify extends AppCompatActivity {
         for (int i = 0; i < labelList.size(); ++i) {
             if(quant){
                 sortedLabels.add(
-                        new AbstractMap.SimpleEntry<>(labelList.get(i), (labelProbArrayB[0][i] & 0xff) / 255.0f));
+                        new AbstractMap.SimpleEntry<>(labelList.get(i), (labelProbArray[0][i])));
             } else {
                 sortedLabels.add(
                         new AbstractMap.SimpleEntry<>(labelList.get(i), labelProbArray[0][i]));
@@ -267,14 +287,37 @@ public class Classify extends AppCompatActivity {
         }
 
         // set the corresponding textviews with the results
-        label1.setText("1. "+topLables[2]);
-        label2.setText("2. "+topLables[1]);
-        label3.setText("3. "+topLables[0]);
-        Confidence1.setText(topConfidence[2]);
-        Confidence2.setText(topConfidence[1]);
-        Confidence3.setText(topConfidence[0]);
+        label1.setText("1. "+topLables[1]);
+        label2.setText("2. "+topLables[0]);
+        //label3.setText("3. "+topLables[0]);
+        Confidence1.setText(topConfidence[1]);
+        Confidence2.setText(topConfidence[0]);
+        //Confidence3.setText(topConfidence[0]);
     }
 
+    /**
+     * Copies specified asset to the file in /files app directory and returns this file absolute path.
+     *
+     * @return absolute file path
+     */
+    public static String assetFilePath(Context context, String assetName) throws IOException {
+        File file = new File(context.getFilesDir(), assetName);
+        if (file.exists() && file.length() > 0) {
+            return file.getAbsolutePath();
+        }
+
+        try (InputStream is = context.getAssets().open(assetName)) {
+            try (OutputStream os = new FileOutputStream(file)) {
+                byte[] buffer = new byte[4 * 1024];
+                int read;
+                while ((read = is.read(buffer)) != -1) {
+                    os.write(buffer, 0, read);
+                }
+                os.flush();
+            }
+            return file.getAbsolutePath();
+        }
+    }
 
     // resizes bitmap to given dimensions
     public Bitmap getResizedBitmap(Bitmap bm, int newWidth, int newHeight) {
@@ -288,4 +331,58 @@ public class Classify extends AppCompatActivity {
                 bm, 0, 0, width, height, matrix, false);
         return resizedBitmap;
     }
+
+    // resizes bitmap to given dimensions
+    public int[] getResizeTarget(Bitmap bm, int resizeHeight, int resizeWidth){
+        float ratio, orig_height, orig_width;
+        orig_height = bm.getHeight();
+        orig_width = bm.getWidth();
+        ratio = Math.min(orig_height/resizeHeight , orig_width/resizeWidth);
+        int[] result = {Math.round(orig_height/ratio), Math.round(orig_width/ratio)};
+        return result;
+    }
+
+    public Bitmap cropBitMap(Bitmap bm, int newWidth, int newHeight){
+        int height = bm.getHeight();
+        int width = bm.getWidth();
+        int startRow = (int) Math.round((height-newHeight)*0.5);
+        int startCol = (int) Math.round((width-newWidth)*0.5);
+        Matrix matrix = new Matrix();
+        Bitmap croppedBitmap = Bitmap.createBitmap(
+                bm, startCol, startRow, newWidth, newHeight, matrix, false);
+        return croppedBitmap;
+    }
+
+    public float[] softmax(float[] scores){
+        float[] exp_scores = new float[scores.length];
+        float[] result = new float[scores.length];
+        float sum = 0;
+        // Convert to exponential and computing the sum
+        for(int i=0; i<scores.length; i++){
+            exp_scores[i] = (float) Math.exp(scores[i]);
+            sum = sum + exp_scores[i];
+        }
+        // divide exp scores with sum to get result
+        for(int i=0; i<scores.length; i++){
+            result[i] = exp_scores[i]/sum;
+        }
+        return result;
+    }
+
+
+//    def _crop_pad_default(x, size, padding_mode='reflection', row_pct:uniform = 0.5, col_pct:uniform = 0.5):
+//            "Crop and pad tfm - `row_pct`,`col_pct` sets focal point."
+//    padding_mode = _pad_mode_convert[padding_mode]
+//    size = tis2hw(size)
+//    if x.shape[1:] == torch.Size(size): return x
+//            rows,cols = size
+//    row_pct,col_pct = _minus_epsilon(row_pct,col_pct)
+//    if x.size(1)<rows or x.size(2)<cols:
+//    row_pad = max((rows-x.size(1)+1)//2, 0)
+//    col_pad = max((cols-x.size(2)+1)//2, 0)
+//    x = F.pad(x[None], (col_pad,col_pad,row_pad,row_pad), mode=padding_mode)[0]
+//    row = int((x.size(1)-rows+1)*row_pct)
+//    col = int((x.size(2)-cols+1)*col_pct)
+//    x = x[:, row:row+rows, col:col+cols]
+//            return x.contiguous() # without this, get NaN later - don't know why
 }

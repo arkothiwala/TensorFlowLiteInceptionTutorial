@@ -15,8 +15,8 @@
         android:layout_height="wrap_content"
         android:layout_alignParentTop="true"
         android:layout_centerHorizontal="true"
-        android:layout_marginTop="119dp"
-        android:text="Inception Float" />
+        android:layout_marginTop="339dp"
+        android:text="Distraction Detection" />
 
     <Button
         android:id="@+id/inception_quant"
@@ -25,5 +25,6 @@
         android:layout_alignParentBottom="true"
         android:layout_centerHorizontal="true"
         android:layout_marginBottom="262dp"
-        android:text="Inception Quantized" />
+        android:text="Inception Quantized"
+        android:visibility = "gone"/>
 </RelativeLayout>
